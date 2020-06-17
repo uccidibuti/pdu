@@ -18,6 +18,7 @@ maintenance = { status = "passively-maintained" }
 [features]
 default = ["std"]
 std = []
+bpf = []
 
 [dev-dependencies]
 base16 = { version = "~0.2" }

@@ -23,24 +23,39 @@
 mod ethernet;
 pub use ethernet::{EtherType, Ethernet, EthernetPdu};
 
+#[cfg(not(feature = "bpf"))]
 mod arp;
+#[cfg(not(feature = "bpf"))]
 pub use arp::ArpPdu;
 
 mod ip;
+#[cfg(not(feature = "bpf"))]
 pub use ip::{Ip, IpProto, Ipv4, Ipv4Option, Ipv4Pdu, Ipv6, Ipv6ExtensionHeader, Ipv6Pdu};
 
+#[cfg(feature = "bpf")]
+pub use ip::{Ip, IpProto, Ipv4, Ipv4Option, Ipv4Pdu};
+
+#[cfg(not(feature = "bpf"))]
 mod tcp;
+#[cfg(not(feature = "bpf"))]
 pub use tcp::{Tcp, TcpFlag, TcpOption, TcpPdu};
 
+#[cfg(not(feature = "bpf"))]
 mod udp;
+#[cfg(not(feature = "bpf"))]
 pub use udp::{Udp, UdpPdu};
 
+#[cfg(not(feature = "bpf"))]
 mod icmp;
+#[cfg(not(feature = "bpf"))]
 pub use icmp::IcmpPdu;
 
+#[cfg(not(feature = "bpf"))]
 mod gre;
+#[cfg(not(feature = "bpf"))]
 pub use gre::{Gre, GrePdu};
 
+#[cfg(not(feature = "bpf"))]
 mod util;
 
 /// Defines the set of possible errors returned by packet parsers in this crate
@@ -64,4 +79,10 @@ impl std::fmt::Display for Error {
             Error::Malformed => f.write_str("frame is malformed"),
         }
     }
+}
+
+#[cfg(feature = "bpf")]
+#[cfg_attr(feature = "bpf", inline(always))]
+pub fn is_invalid_index(buffer: &[u8], index: isize, buffer_end_pointer: *const u8) -> bool {
+    unsafe  { buffer_end_pointer < buffer.as_ptr().offset(index) }
 }

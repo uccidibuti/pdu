@@ -18,7 +18,11 @@
 
 use core::convert::TryInto;
 
+#[cfg(not(feature = "bpf"))]
 use crate::{util, Error, Result};
+
+#[cfg(feature = "bpf")]
+use crate::{Error, Result};
 
 /// Provides constants representing various IP protocol numbers supported by this crate
 #[allow(non_snake_case)]
@@ -39,6 +43,7 @@ pub enum Ip<'a> {
 
 impl<'a> Ip<'a> {
     /// Constructs either an [`Ipv4Pdu`] or [`Ipv6Pdu`] backed by the provided `buffer`
+    #[cfg(not(feature = "bpf"))]
     pub fn new(buffer: &'a [u8]) -> Result<Self> {
         if buffer.is_empty() {
             return Err(Error::Truncated);
@@ -49,15 +54,32 @@ impl<'a> Ip<'a> {
             _ => Err(Error::Malformed),
         }
     }
+
+    #[cfg(feature = "bpf")]
+    #[cfg_attr(feature = "bpf", inline(always))]
+    pub fn new(buffer: &'a [u8], buffer_end_pointer: *const u8) -> Result<Self> {
+        if buffer.is_empty() {
+            return Err(Error::Truncated);
+        }
+        match buffer[0] >> 4 {
+            4 => Ok(Ip::Ipv4(Ipv4Pdu::new(buffer, buffer_end_pointer)?)),
+//            6 => Ok(Ip::Ipv6(Ipv6Pdu::new(buffer)?)),
+            _ => Err(Error::Malformed),
+        }
+    }
+
 }
 
 /// Represents an IPv4 header and payload
 #[derive(Debug, Copy, Clone)]
 pub struct Ipv4Pdu<'a> {
     buffer: &'a [u8],
+    #[cfg(feature = "bpf")]
+    buffer_end_pointer: *const u8,
 }
 
 /// Contains the inner payload of an [`Ipv4Pdu`]
+#[cfg(not(feature = "bpf"))]
 #[derive(Debug, Copy, Clone)]
 pub enum Ipv4<'a> {
     Raw(&'a [u8]),
@@ -67,8 +89,19 @@ pub enum Ipv4<'a> {
     Gre(super::GrePdu<'a>),
 }
 
+#[cfg(feature = "bpf")]
+#[derive(Debug, Copy, Clone)]
+pub enum Ipv4<'a> {
+    Raw(&'a [u8]),
+    // Tcp(super::TcpPdu<'a>),
+    // Udp(super::UdpPdu<'a>),
+    // Icmp(super::IcmpPdu<'a>),
+    // Gre(super::GrePdu<'a>),
+}
+
 impl<'a> Ipv4Pdu<'a> {
     /// Constructs an [`Ipv4Pdu`] backed by the provided `buffer`
+    #[cfg(not(feature = "bpf"))]
     pub fn new(buffer: &'a [u8]) -> Result<Self> {
         let pdu = Ipv4Pdu { buffer };
         if buffer.len() < 20 || pdu.computed_ihl() < 20 {
@@ -112,17 +145,65 @@ impl<'a> Ipv4Pdu<'a> {
         Ok(pdu)
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
+    #[cfg(feature = "bpf")]
+    pub fn new(buffer: &'a [u8], buffer_end_pointer: *const u8) -> Result<Self> {
+        let pdu = Ipv4Pdu { buffer, buffer_end_pointer };
+        if super::is_invalid_index(buffer, 20, buffer_end_pointer) || pdu.computed_ihl() < 20 {
+            return Err(Error::Truncated);
+        }
+        if super::is_invalid_index(buffer, pdu.computed_ihl() as isize, buffer_end_pointer)
+            || buffer.len() < (pdu.total_length() as usize)
+            || (pdu.total_length() as usize) < pdu.computed_ihl()
+        {
+            return Err(Error::Malformed);
+        }
+        if pdu.version() != 4 {
+            return Err(Error::Malformed);
+        }
+        // if pdu.computed_ihl() > 20 {
+        //     let mut position = 20;
+        //     while position < pdu.computed_ihl() {
+        //         if buffer.len() <= position {
+        //             return Err(Error::Truncated);
+        //         }
+        //         position += match buffer[position] {
+        //             0 | 1 => 1usize,
+        //             _ => {
+        //                 if buffer.len() <= (position + 1) {
+        //                     return Err(Error::Truncated);
+        //                 }
+        //                 if buffer[position + 1] < 2 {
+        //                     return Err(Error::Malformed);
+        //                 }
+        //                 buffer[position + 1] as usize
+        //             }
+        //         };
+        //     }
+        //     if buffer.len() < position {
+        //         return Err(Error::Truncated);
+        //     }
+        //     if pdu.computed_ihl() != position {
+        //         return Err(Error::Malformed);
+        //     }
+        // }
+        Ok(pdu)
+    }
+
     /// Returns a reference to the entire underlying buffer that was provided during construction
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn buffer(&'a self) -> &'a [u8] {
         self.buffer
     }
 
     /// Returns the slice of the underlying buffer that contains the header part of this PDU
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn as_bytes(&'a self) -> &'a [u8] {
         &self.buffer[0..self.computed_ihl()]
     }
 
     /// Returns an object representing the inner payload of this PDU
+    #[cfg(not(feature = "bpf"))]
     pub fn inner(&'a self) -> Result<Ipv4<'a>> {
         let rest = &self.buffer[self.computed_ihl()..];
 
@@ -145,74 +226,92 @@ impl<'a> Ipv4Pdu<'a> {
         }
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn version(&'a self) -> u8 {
         self.buffer[0] >> 4
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn ihl(&'a self) -> u8 {
         self.buffer[0] & 0xF
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn computed_ihl(&'a self) -> usize {
         self.ihl() as usize * 4
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn dscp(&'a self) -> u8 {
         self.buffer[1] >> 2
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn ecn(&'a self) -> u8 {
         self.buffer[1] & 0x3
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn total_length(&'a self) -> u16 {
         u16::from_be_bytes(self.buffer[2..=3].try_into().unwrap())
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn identification(&'a self) -> u16 {
         u16::from_be_bytes(self.buffer[4..=5].try_into().unwrap())
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn dont_fragment(&'a self) -> bool {
         self.buffer[6] & 0x40 != 0
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn more_fragments(&'a self) -> bool {
         self.buffer[6] & 0x20 != 0
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn fragment_offset(&'a self) -> u16 {
         u16::from_be_bytes([self.buffer[6] & 0x1f, self.buffer[7]])
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn ttl(&'a self) -> u8 {
         self.buffer[8]
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn protocol(&'a self) -> u8 {
         self.buffer[9]
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn checksum(&'a self) -> u16 {
         u16::from_be_bytes(self.buffer[10..=11].try_into().unwrap())
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
+    #[cfg(not(feature = "bpf"))]
     pub fn computed_checksum(&'a self) -> u16 {
         util::checksum(&[&self.buffer[0..=9], &self.buffer[12..self.computed_ihl()]])
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn source_address(&'a self) -> [u8; 4] {
         let mut source_address = [0u8; 4];
         source_address.copy_from_slice(&self.buffer[12..16]);
         source_address
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn destination_address(&'a self) -> [u8; 4] {
         let mut destination_address = [0u8; 4];
         destination_address.copy_from_slice(&self.buffer[16..20]);
         destination_address
     }
 
+    #[cfg_attr(feature = "bpf", inline(always))]
     pub fn options(&'a self) -> Ipv4OptionIterator<'a> {
         Ipv4OptionIterator { buffer: &self.buffer, pos: 20, ihl: self.computed_ihl() }
     }
@@ -257,6 +356,7 @@ pub struct Ipv6Pdu<'a> {
 }
 
 /// Contains the inner payload of an [`Ipv6Pdu`]
+#[cfg(not(feature = "bpf"))]
 #[derive(Debug, Copy, Clone)]
 pub enum Ipv6<'a> {
     Raw(&'a [u8]),
@@ -266,6 +366,7 @@ pub enum Ipv6<'a> {
     Gre(super::GrePdu<'a>),
 }
 
+#[cfg(not(feature = "bpf"))]
 impl<'a> Ipv6Pdu<'a> {
     /// Constructs an [`Ipv6Pdu`] backed by the provided `buffer`
     pub fn new(buffer: &'a [u8]) -> Result<Self> {
@@ -420,12 +521,14 @@ impl<'a> Ipv6Pdu<'a> {
 }
 
 /// Represents an IPv6 extension header
+#[cfg(not(feature = "bpf"))]
 #[derive(Debug, Copy, Clone)]
 pub enum Ipv6ExtensionHeader<'a> {
     Raw { header: u8, data: &'a [u8] },
     Fragment { identification: u32, offset: u16, more_fragments: bool },
 }
 
+#[cfg(not(feature = "bpf"))]
 #[derive(Debug, Copy, Clone)]
 pub struct Ipv6ExtensionHeaderIterator<'a> {
     buffer: &'a [u8],
@@ -433,6 +536,7 @@ pub struct Ipv6ExtensionHeaderIterator<'a> {
     next_header: u8,
 }
 
+#[cfg(not(feature = "bpf"))]
 impl<'a> Iterator for Ipv6ExtensionHeaderIterator<'a> {
     type Item = Ipv6ExtensionHeader<'a>;
 
